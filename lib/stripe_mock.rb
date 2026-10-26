@@ -1,5 +1,4 @@
-require 'ostruct'
-require 'multi_json'
+require 'json'
 require 'dante'
 require 'time'
 

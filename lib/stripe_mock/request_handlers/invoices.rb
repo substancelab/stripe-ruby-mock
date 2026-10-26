@@ -71,39 +71,99 @@ module StripeMock
         )
       end
 
-      # Replaces the upcoming invoice API as of API version 2025-03-31.basil.
-      # Translates the new params into the legacy upcoming invoice params.
+      # Accepts both the subscription_details params (stripe >= 15, API version
+      # 2025-03-31.basil) and the older top-level subscription_* params.
       def create_preview_invoice(route, method_url, params, headers = {})
-        details = params[:subscription_details] || {}
-        items = details[:items]
-        items = items.values if items.respond_to?(:values)
-        items = Array(items)
+        stripe_account = headers && headers[:stripe_account] || Stripe.api_key
+        route =~ method_url
 
-        raise Stripe::InvalidRequestError.new('Missing required param: customer if subscription is not provided', nil, http_status: 400) if params[:customer].nil? && params[:subscription].nil?
-        if params[:customer]
-          stripe_account = headers && headers[:stripe_account] || Stripe.api_key
-          assert_existence :customer, params[:customer], customers[stripe_account][params[:customer]]
-        end
-        if params[:subscription].nil? && items.empty?
+        details = params[:subscription_details] || {}
+        items = list_param(details[:items] || params[:subscription_items])
+        invoice_items = list_param(params[:invoice_items])
+        proration_date = details[:proration_date] || params[:subscription_proration_date]
+        trial_end = details[:trial_end] || params[:subscription_trial_end]
+
+        raise Stripe::InvalidRequestError.new('Missing required param: customer', nil, http_status: 400) if params[:customer].nil? && params[:subscription].nil?
+
+        customer =
+          if params[:customer]
+            assert_existence :customer, params[:customer], customers[stripe_account][params[:customer]]
+          else
+            subscription = assert_existence :subscription, params[:subscription], subscriptions[params[:subscription]]
+            customers[stripe_account][subscription[:customer]]
+          end
+
+        if Compat.stripe_gte_15? && params[:subscription].nil? && items.empty? && invoice_items.empty?
           raise Stripe::InvalidRequestError.new('You must specify either `subscription` or `subscription_details.items` when previewing an invoice', nil, http_status: 400)
         end
 
-        legacy_params = params.slice(:customer, :subscription)
-        if (item = items.first)
-          legacy_params[:subscription_plan] = item[:price] || item[:plan]
-          legacy_params[:subscription_quantity] = item[:quantity]&.to_i
-        end
-        legacy_params[:subscription_proration_date] = details[:proration_date]&.to_i if details[:proration_date]
-        legacy_params[:subscription_trial_end] = details[:trial_end]&.to_i if details[:trial_end]
+        subscription =
+          if params[:subscription]
+            customer[:subscriptions][:data].find { |s| s[:id] == params[:subscription] } ||
+              raise(Stripe::InvalidRequestError.new("No such subscription: #{params[:subscription]}", nil, http_status: 404))
+          elsif items.empty?
+            customer[:subscriptions][:data].min_by { |sub| sub[:current_period_end] }
+          end
 
-        invoice = upcoming_invoice(route, method_url, legacy_params, headers)
-        invoice[:id] = new_id('upcoming_in')
+        extra_lines = invoice_items.map do |item|
+          Data.mock_line_item(
+            id: new_id('ii'),
+            amount: item[:amount].to_i,
+            description: item[:description] || 'Invoice item',
+            quantity: (item[:quantity] || 1).to_i
+          )
+        end
+
+        invoice =
+          if subscription
+            upcoming_params = { customer: customer[:id], subscription: subscription[:id] }
+            if (item = items.first)
+              upcoming_params[:subscription_plan] = item[:price] || item[:plan]
+              upcoming_params[:subscription_quantity] = item[:quantity]&.to_i
+            end
+            upcoming_params[:subscription_proration_date] = proration_date.to_i if proration_date
+            upcoming_params[:subscription_trial_end] = trial_end.to_i if trial_end
+            build_upcoming_invoice(upcoming_params, stripe_account, extra_lines)
+          else
+            raise Stripe::InvalidRequestError.new('Cannot specify proration date without specifying a subscription', nil, http_status: 400) if proration_date
+
+            # Previewing a new subscription with the given items
+            lines = items.map do |item|
+              plan_id = item[:price] || item[:plan]
+              plan = assert_existence :plan, plan_id, plans[plan_id.to_s]
+              quantity = (item[:quantity] || 1).to_i
+              Data.mock_line_item(
+                id: new_id('ii'),
+                type: 'subscription',
+                plan: plan,
+                amount: (plan[:amount] || plan[:unit_amount]) * quantity,
+                quantity: quantity
+              )
+            end
+            now = Time.now.to_i
+            Data.mock_invoice(lines + extra_lines,
+              customer: customer[:id],
+              discount: customer[:discount],
+              created: now,
+              starting_balance: customer[:account_balance],
+              period_start: now,
+              period_end: now,
+              next_payment_attempt: now + 3600)
+          end
+
+        invoice[:id] = new_id(Compat.stripe_gte_15? ? 'upcoming_in' : 'in')
         invoice
       end
 
       def upcoming_invoice(route, method_url, params, headers = {})
         stripe_account = headers && headers[:stripe_account] || Stripe.api_key
         route =~ method_url
+        build_upcoming_invoice(params, stripe_account)
+      end
+
+      private
+
+      def build_upcoming_invoice(params, stripe_account, extra_lines = [])
         raise Stripe::InvalidRequestError.new('Missing required param: customer if subscription is not provided', nil, http_status: 400) if params[:customer].nil? && params[:subscription].nil?
         raise Stripe::InvalidRequestError.new('When previewing changes to a subscription, you must specify either `subscription` or `subscription_items`', nil, http_status: 400) if !params[:subscription_proration_date].nil? && params[:subscription].nil? && params[:subscription_plan].nil?
         raise Stripe::InvalidRequestError.new('Cannot specify proration date without specifying a subscription', nil, http_status: 400) if !params[:subscription_proration_date].nil? && params[:subscription].nil?
@@ -188,6 +248,7 @@ module StripeMock
 
         subscription_line = get_mock_subscription_line_item(preview_subscription)
         invoice_lines << subscription_line
+        invoice_lines.concat(extra_lines)
 
         Data.mock_invoice(invoice_lines,
           id: new_id('in'),
@@ -201,7 +262,12 @@ module StripeMock
           next_payment_attempt: preview_subscription[:current_period_end] + 3600 )
       end
 
-      private
+
+      # Array params can arrive as arrays or as hashes keyed by index
+      def list_param(value)
+        value = value.values if value.respond_to?(:values)
+        Array(value)
+      end
 
       def get_mock_subscription_line_item(subscription)
         plan_amount = subscription[:plan][:amount] || subscription[:plan][:unit_amount]

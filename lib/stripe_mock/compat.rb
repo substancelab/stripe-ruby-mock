@@ -4,6 +4,11 @@ module StripeMock
       Gem::Version.new(Stripe::VERSION) >= Gem::Version.new('13.0.0')
     end
 
+    # stripe-ruby 15 targets API version 2025-03-31.basil
+    def self.stripe_gte_15?
+      Gem::Version.new(Stripe::VERSION) >= Gem::Version.new('15.0.0')
+    end
+
     def self.method
       return :execute_request unless stripe_gte_13?
 

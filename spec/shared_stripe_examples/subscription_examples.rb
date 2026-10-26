@@ -4,6 +4,23 @@ require 'securerandom'
 shared_examples 'Customer Subscriptions with plans' do
   let(:gen_card_tk) { stripe_helper.generate_card_token }
 
+  # Stripe v6 uses #delete, v7+ uses #cancel
+  def cancel_subscription(sub, **opts)
+    if sub.respond_to?(:cancel)
+      sub.cancel(**opts)
+    else
+      sub.delete(**opts)
+    end
+  end
+
+  def cancel_subscription_by_id(id)
+    if Stripe::Subscription.respond_to?(:cancel)
+      Stripe::Subscription.cancel(id)
+    else
+      Stripe::Subscription.delete(id)
+    end
+  end
+
   let(:product) { stripe_helper.create_product }
   let(:plan_attrs) { {id: 'silver', product: product.id, amount: 4999, currency: 'usd'} }
   let(:plan) { stripe_helper.create_plan(plan_attrs) }
@@ -586,7 +603,7 @@ shared_examples 'Customer Subscriptions with plans' do
         ]
       )
 
-      expect(subscription.current_period_end).to eq (Time.now + (7 * 60 * 60 * 24)).to_i
+      expect(subscription.current_period_end).to be_within(2).of((Time.now + (7 * 60 * 60 * 24)).to_i)
     end
 
     it 'sets current_period_end based on price month interval', live: true do
@@ -599,7 +616,7 @@ shared_examples 'Customer Subscriptions with plans' do
         ]
       )
 
-      expect(subscription.current_period_end).to eq (DateTime.now >> 1).to_time.to_i
+      expect(subscription.current_period_end).to be_within(2).of((DateTime.now >> 1).to_time.to_i)
     end
 
     it 'sets current_period_end based on price year interval', live: true do
@@ -612,7 +629,7 @@ shared_examples 'Customer Subscriptions with plans' do
         ]
       )
 
-      expect(subscription.current_period_end).to eq (DateTime.now >> 12).to_time.to_i
+      expect(subscription.current_period_end).to be_within(2).of((DateTime.now >> 12).to_time.to_i)
     end
 
     it 'add a new subscription to bill via an invoice' do
@@ -687,7 +704,7 @@ shared_examples 'Customer Subscriptions with plans' do
       customer = Stripe::Customer.create(id: 'test_customer_sub', source: gen_card_tk)
 
       sub = Stripe::Subscription.create({ items: { '0' => { plan: 'silver' } }, customer: customer.id })
-      sub.cancel(at_period_end: true)
+      cancel_subscription(sub, at_period_end: true)
 
       expect(sub.cancel_at_period_end).to be_truthy
       expect(sub.save).to be_truthy
@@ -752,7 +769,7 @@ shared_examples 'Customer Subscriptions with plans' do
       customer = Stripe::Customer.create(source: gen_card_tk, plan: plan.id)
 
       subscription = Stripe::Subscription.retrieve(customer.subscriptions.data.first.id)
-      subscription.cancel
+      cancel_subscription(subscription)
 
       expect { subscription.save }.to raise_error { |e|
         expect(e).to be_a(Stripe::InvalidRequestError)
@@ -765,7 +782,7 @@ shared_examples 'Customer Subscriptions with plans' do
       customer = Stripe::Customer.create(id: 'test_customer_sub', source: gen_card_tk)
 
       sub = Stripe::Subscription.create({ items: [ { plan: plan.id } ], customer: customer.id })
-      sub.cancel(at_period_end: true)
+      cancel_subscription(sub, at_period_end: true)
 
       expect(sub.cancel_at_period_end).to be_truthy
       expect(sub.save).to be_truthy
@@ -1208,7 +1225,7 @@ shared_examples 'Customer Subscriptions with plans' do
       customer = Stripe::Customer.create(source: gen_card_tk, plan: plan.id)
 
       sub = Stripe::Subscription.retrieve(customer.subscriptions.data.first.id)
-      result = sub.cancel
+      result = cancel_subscription(sub)
 
       expect(result.status).to eq('canceled')
       expect(result.cancel_at_period_end).to eq false
@@ -1310,7 +1327,7 @@ shared_examples 'Customer Subscriptions with plans' do
     customer = Stripe::Customer.create(id: 'test_customer_sub', source: gen_card_tk, plan: "trial")
 
     sub = Stripe::Subscription.retrieve(customer.subscriptions.data.first.id)
-    result = sub.cancel(at_period_end: true)
+    result = cancel_subscription(sub, at_period_end: true)
 
     expect(result.status).to eq('trialing')
 
@@ -1398,7 +1415,7 @@ shared_examples 'Customer Subscriptions with plans' do
     it "does not include canceled subscriptions by default" do
       customer = Stripe::Customer.create(source: gen_card_tk)
       subscription = Stripe::Subscription.create({ plan: plan.id, customer: customer.id })
-      subscription.cancel
+      cancel_subscription(subscription)
 
       list = Stripe::Subscription.list({customer: customer.id})
 
@@ -1432,8 +1449,13 @@ shared_examples 'Customer Subscriptions with plans' do
       list = Stripe::Subscription.list({ current_period_end: { lte: subscription1.current_period_end }})
       expect(list.data).to contain_exactly(subscription1)
 
+      # subscription1 and subscription2 are created moments apart, so in some test runs have
+      # slightly different start times. Query by each start time in case they are different.
       list = Stripe::Subscription.list({ current_period_start: subscription1.current_period_start })
-      expect(list.data).to contain_exactly(subscription1, subscription2)
+      expect(list.data).to include(subscription1)
+
+      list = Stripe::Subscription.list({ current_period_start: subscription2.current_period_start })
+      expect(list.data).to include(subscription2)
 
       list = Stripe::Subscription.list({ current_period_end: subscription2.current_period_end })
       expect(list.data).to contain_exactly(subscription2)
@@ -1507,7 +1529,7 @@ shared_examples 'Customer Subscriptions with plans' do
       customer = Stripe::Customer.create(email: 'johnny@appleseed.com', source: gen_card_tk)
       one = Stripe::Subscription.create(customer: customer.id, items: [{plan: "Sample5"}], metadata: {key: 'uno'})
       two = Stripe::Subscription.create(customer: customer.id, items: [{plan: "Sample5"}], metadata: {key: 'dos'})
-      Stripe::Subscription.cancel(two.id)
+      cancel_subscription_by_id(two.id)
 
       response = Stripe::Subscription.search({query: 'status:"active"'}, stripe_version: '2020-08-27')
       expect(response.data.map(&:id)).to match_array([one.id])
