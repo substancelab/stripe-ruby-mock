@@ -1,4 +1,6 @@
 ### Unreleased
+- Keep `created` and `billing_cycle_anchor` when updating a subscription, unless the update sets a new anchor, changes the trial or changes the billing interval
+- Derive a price's `unit_amount_decimal` from its `unit_amount` instead of always returning `"2000"`
 - Support Stripe version 20.0.0
 - Support `allowed_payment_method_types` and `excluded_payment_method_types` on PaymentIntents, SetupIntents and Checkout Sessions, computing the read-only `payment_method_types` from them. On stripe >= 20 passing `payment_method_types` raises a 400 `payment_method_types_no_longer_supported` error, and `create_checkout_session` in the test helper uses `allowed_payment_method_types`
 - Support the object format of `billing_cycle_anchor` (e.g. `{ type: 'now' }`) when updating subscriptions. On stripe >= 20 the `'now'` and `'unchanged'` strings raise a 400 error. `'unchanged'` no longer gets stored as the anchor

@@ -46,6 +46,20 @@ shared_examples 'Price API' do
     expect(price_with_trial.trial_period_days).to eq(30)
   end
 
+  it "derives unit_amount_decimal from unit_amount" do
+    price = Stripe::Price.create(product: product_id, currency: "usd", unit_amount: 1234, recurring: { interval: "month" })
+
+    expect(price.unit_amount).to eq(1234)
+    # stripe-ruby >= 19 returns decimal strings as BigDecimal, so compare numerically
+    expect(price.unit_amount_decimal.to_i).to eq(1234)
+  end
+
+  it "keeps an explicit unit_amount_decimal" do
+    price = Stripe::Price.create(product: product_id, currency: "usd", unit_amount_decimal: "12.5", recurring: { interval: "month" })
+
+    expect(price.unit_amount_decimal.to_f).to eq(12.5)
+  end
+
   it "creates a stripe price without specifying ID" do
     expect(price_attributes_without_id[:id]).to be_nil
     expect(price_without_id.id).to match(/^test_price_1/)

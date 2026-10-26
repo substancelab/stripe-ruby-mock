@@ -675,7 +675,12 @@ module StripeMock
         type: "recurring",
         unit_amount: 2000,
         unit_amount_decimal: "2000"
-      }.merge(params)
+      }.merge(params).tap do |price|
+        # unit_amount_decimal follows unit_amount unless given explicitly
+        if params.key?(:unit_amount) && !params.key?(:unit_amount_decimal)
+          price[:unit_amount_decimal] = price[:unit_amount]&.to_s
+        end
+      end
     end
 
     def self.mock_product(params={})

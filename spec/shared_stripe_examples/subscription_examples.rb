@@ -1236,7 +1236,7 @@ shared_examples 'Customer Subscriptions with plans' do
 
       it 'accepts { type: "unchanged" }' do
         updated = Stripe::Subscription.update(subscription.id, billing_cycle_anchor: { type: 'unchanged' })
-        expect(updated.billing_cycle_anchor).to be_a(Integer)
+        expect(updated.billing_cycle_anchor).to eq(future_anchor)
       end
 
       it 'rejects an unknown type' do
@@ -1257,6 +1257,31 @@ shared_examples 'Customer Subscriptions with plans' do
           updated = Stripe::Subscription.update(subscription.id, billing_cycle_anchor: 'now')
           expect(updated.billing_cycle_anchor).to be_within(5).of(Time.now.utc.to_i)
         end
+      end
+    end
+
+    describe 'created and billing_cycle_anchor' do
+      let(:customer) { Stripe::Customer.create(source: gen_card_tk) }
+      let(:created) { Time.now.utc.to_i - 86_400 }
+      let(:future_anchor) { Time.now.utc.to_i + 3600 }
+      let(:subscription) do
+        Stripe::Subscription.create(items: [{ plan: plan.id }], customer: customer.id, created: created, billing_cycle_anchor: future_anchor)
+      end
+
+      it 'keeps them when the update does not change the billing cycle' do
+        updated = Stripe::Subscription.update(subscription.id, metadata: { foo: 'bar' })
+
+        expect(updated.created).to eq(created)
+        expect(updated.billing_cycle_anchor).to eq(future_anchor)
+      end
+
+      it 'resets the anchor when switching to a plan with a different interval' do
+        yearly_plan = stripe_helper.create_plan(id: 'yearly', product: product.id, amount: 4999, currency: 'usd', interval: 'year')
+
+        updated = Stripe::Subscription.update(subscription.id, items: [{ id: subscription.items.data.first.id, plan: yearly_plan.id }])
+
+        expect(updated.created).to eq(created)
+        expect(updated.billing_cycle_anchor).to be_within(5).of(Time.now.utc.to_i)
       end
     end
   end
