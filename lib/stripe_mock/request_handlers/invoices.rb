@@ -5,6 +5,7 @@ module StripeMock
       def Invoices.included(klass)
         klass.add_handler 'post /v1/invoices',               :new_invoice
         klass.add_handler 'get /v1/invoices/upcoming',       :upcoming_invoice
+        klass.add_handler 'post /v1/invoices/create_preview', :create_preview_invoice
         klass.add_handler 'get /v1/invoices/(.*)/lines',     :get_invoice_line_items
         klass.add_handler 'get /v1/invoices/((?!search).*)', :get_invoice
         klass.add_handler 'get /v1/invoices/search',         :search_invoices
@@ -68,6 +69,36 @@ module StripeMock
           :attempted => true,
           :charge => charge[:id],
         )
+      end
+
+      # Replaces the upcoming invoice API as of API version 2025-03-31.basil.
+      # Translates the new params into the legacy upcoming invoice params.
+      def create_preview_invoice(route, method_url, params, headers = {})
+        details = params[:subscription_details] || {}
+        items = details[:items]
+        items = items.values if items.respond_to?(:values)
+        items = Array(items)
+
+        raise Stripe::InvalidRequestError.new('Missing required param: customer if subscription is not provided', nil, http_status: 400) if params[:customer].nil? && params[:subscription].nil?
+        if params[:customer]
+          stripe_account = headers && headers[:stripe_account] || Stripe.api_key
+          assert_existence :customer, params[:customer], customers[stripe_account][params[:customer]]
+        end
+        if params[:subscription].nil? && items.empty?
+          raise Stripe::InvalidRequestError.new('You must specify either `subscription` or `subscription_details.items` when previewing an invoice', nil, http_status: 400)
+        end
+
+        legacy_params = params.slice(:customer, :subscription)
+        if (item = items.first)
+          legacy_params[:subscription_plan] = item[:price] || item[:plan]
+          legacy_params[:subscription_quantity] = item[:quantity]&.to_i
+        end
+        legacy_params[:subscription_proration_date] = details[:proration_date]&.to_i if details[:proration_date]
+        legacy_params[:subscription_trial_end] = details[:trial_end]&.to_i if details[:trial_end]
+
+        invoice = upcoming_invoice(route, method_url, legacy_params, headers)
+        invoice[:id] = new_id('upcoming_in')
+        invoice
       end
 
       def upcoming_invoice(route, method_url, params, headers = {})

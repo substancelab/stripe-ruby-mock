@@ -233,9 +233,35 @@ shared_examples 'Invoice API' do
     # after { coupon_amtoff.delete  rescue nil if @teardown_coupon_amtoff }
     # after { customer.delete       rescue nil if @teardown_customer }
 
+    # Stripe::Invoice.upcoming was removed in stripe-ruby 15 (API version
+    # 2025-03-31.basil) in favor of Stripe::Invoice.create_preview.
+    def legacy_upcoming_api?
+      Stripe::Invoice.respond_to?(:upcoming)
+    end
+
+    # Takes legacy upcoming invoice params and calls whichever API the
+    # installed stripe gem supports.
+    def preview_invoice(params = {})
+      return Stripe::Invoice.upcoming(params) if legacy_upcoming_api?
+
+      params = params.dup
+      plan = params.delete(:subscription_plan)
+      quantity = params.delete(:subscription_quantity)
+      proration_date = params.delete(:subscription_proration_date)
+      trial_end = params.delete(:subscription_trial_end)
+
+      details = {}
+      details[:items] = [{ price: plan, quantity: quantity }.compact] if plan || quantity
+      details[:proration_date] = proration_date if proration_date
+      details[:trial_end] = trial_end if trial_end
+      params[:subscription_details] = details unless details.empty?
+
+      Stripe::Invoice.create_preview(params)
+    end
+
     describe 'parameter validation' do
       it 'fails without parameters' do
-        expect { Stripe::Invoice.upcoming() }.to raise_error {|e|
+        expect { preview_invoice() }.to raise_error {|e|
         expect(e).to be_a(Stripe::InvalidRequestError)
         expect(e.http_status).to eq(400)
         expect(e.message).to eq('Missing required param: customer if subscription is not provided') 
@@ -243,37 +269,55 @@ shared_examples 'Invoice API' do
       end
 
       it 'fails without a valid customer' do
-        expect { Stripe::Invoice.upcoming(customer: 'whatever') }.to raise_error {|e|
+        expect { preview_invoice(customer: 'whatever') }.to raise_error {|e|
           expect(e).to be_a(Stripe::InvalidRequestError)
           expect(e.message).to eq('No such customer: whatever') }
       end
 
       it 'fails without a customer parameter' do
-        expect { Stripe::Invoice.upcoming(gazebo: 'raindance') }.to raise_error {|e|
+        expect { preview_invoice(gazebo: 'raindance') }.to raise_error {|e|
           expect(e).to be_a(Stripe::InvalidRequestError)
           expect(e.http_status).to eq(400)
           expect(e.message).to eq('Missing required param: customer if subscription is not provided') }
       end
 
       it 'fails without a subscription' do
-        expect { Stripe::Invoice.upcoming(customer: customer.id) }.to raise_error {|e|
+        skip 'create_preview requires a subscription or subscription items' unless legacy_upcoming_api?
+
+        expect { preview_invoice(customer: customer.id) }.to raise_error {|e|
           expect(e).to be_a(Stripe::InvalidRequestError)
           expect(e.http_status).to eq(404)
           expect(e.message).to eq("No upcoming invoices for customer: #{customer.id}") }
+      end
+
+      it 'fails with only a customer when using create_preview', with_subscription: true do
+        skip 'only applies to create_preview' if legacy_upcoming_api?
+
+        expect { Stripe::Invoice.create_preview(customer: customer.id) }.to raise_error {|e|
+          expect(e).to be_a(Stripe::InvalidRequestError)
+          expect(e.http_status).to eq(400)
+          expect(e.message).to eq('You must specify either `subscription` or `subscription_details.items` when previewing an invoice') }
       end
     end
 
     describe 'parameter validation' do
       it 'fails without a subscription or subscription plan if subscription proration date is specified', live: true do
-        expect { Stripe::Invoice.upcoming(customer: customer.id, subscription_proration_date: Time.now.to_i) }.to raise_error do |e|
+        expected_message =
+          if legacy_upcoming_api?
+            'When previewing changes to a subscription, you must specify either `subscription` or `subscription_items`'
+          else
+            'You must specify either `subscription` or `subscription_details.items` when previewing an invoice'
+          end
+
+        expect { preview_invoice(customer: customer.id, subscription_proration_date: Time.now.to_i) }.to raise_error do |e|
           expect(e).to be_a Stripe::InvalidRequestError
           expect(e.http_status).to eq 400
-          expect(e.message).to eq 'When previewing changes to a subscription, you must specify either `subscription` or `subscription_items`'
+          expect(e.message).to eq expected_message
         end
       end
 
       it 'fails without a subscription if proration date is specified', live: true, with_subscription: true do
-        expect { Stripe::Invoice.upcoming(customer: customer.id, subscription_plan: plan.id, subscription_proration_date: Time.now.to_i) }.to raise_error do |e|
+        expect { preview_invoice(customer: customer.id, subscription_plan: plan.id, subscription_proration_date: Time.now.to_i) }.to raise_error do |e|
           expect(e).to be_a Stripe::InvalidRequestError
           expect(e.http_status).to eq 400
           expect(e.message).to eq 'Cannot specify proration date without specifying a subscription'
@@ -283,7 +327,7 @@ shared_examples 'Invoice API' do
 
     it 'considers current subscription', live: true, with_subscription: true do
       # When
-      upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+      upcoming = preview_invoice(customer: customer.id, subscription: subscription.id)
 
       # Then
       expect(upcoming).to be_a Stripe::Invoice
@@ -300,7 +344,7 @@ shared_examples 'Invoice API' do
     describe 'discounts' do
       it 'considers a $ off discount', live: true, with_discount_amtoff: true, with_subscription: true do
         # When
-        upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        upcoming = preview_invoice(customer: customer.id, subscription: subscription.id)
 
         # Then
         expect(upcoming.discount).not_to be_nil
@@ -315,7 +359,7 @@ shared_examples 'Invoice API' do
 
       it 'considers a % off discount', live: true, with_discount_pctoff: true, with_subscription: true do
         # When
-        upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        upcoming = preview_invoice(customer: customer.id, subscription: subscription.id)
 
         # Then
         expect(upcoming.discount).not_to be_nil
@@ -332,7 +376,7 @@ shared_examples 'Invoice API' do
     describe 'proration' do
       shared_examples 'failing when proration date is outside of the subscription current period' do
         it 'fails', live: true, skip: 'Stripe does not raise error anymore' do
-          expect { Stripe::Invoice.upcoming(
+          expect { preview_invoice(
               customer: customer.id,
               subscription: subscription.id,
               subscription_plan: plan.id,
@@ -374,7 +418,7 @@ shared_examples 'Invoice API' do
             query[:subscription_trial_end] = (DateTime.now >> 1).to_time.to_i if with_trial
 
             # When
-            upcoming = Stripe::Invoice.upcoming(query)
+            upcoming = preview_invoice(query)
 
             # Then
             expect(upcoming).to be_a Stripe::Invoice
@@ -424,7 +468,7 @@ shared_examples 'Invoice API' do
             query[:subscription_trial_end] = (DateTime.now >> 1).to_time.to_i if with_trial
 
             # When
-            upcoming = Stripe::Invoice.upcoming(query)
+            upcoming = preview_invoice(query)
 
             # Then
             expect(upcoming).to be_a Stripe::Invoice
@@ -474,7 +518,7 @@ shared_examples 'Invoice API' do
 
       describe 'upcoming invoice with no proration parameters specified' do
         let(:preview) do
-          Stripe::Invoice.upcoming(
+          preview_invoice(
               customer: customer.id,
               subscription: subscription.id
           )
@@ -486,7 +530,7 @@ shared_examples 'Invoice API' do
       describe 'upcoming invoice with same subscription plan and quantity specified' do
         let(:preview) do
           proration_date = Time.now + 60
-          Stripe::Invoice.upcoming(
+          preview_invoice(
               customer: customer.id,
               subscription: subscription.id,
               subscription_plan: plan.id,
@@ -503,7 +547,7 @@ shared_examples 'Invoice API' do
     it 'sets the start and end of billing periods correctly when plan has an interval_count' do
       @oddplan = stripe_helper.create_plan(product: product.id, interval: "week", interval_count: 11, id: "weekly_pl")
       @subscription = Stripe::Subscription.create(plan: @oddplan.id, customer: customer.id)
-      @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+      @upcoming = preview_invoice(customer: customer.id, subscription: @subscription.id)
 
       expect(@upcoming.period_start + 6652800).to eq(@upcoming.period_end) # 6652800 = +11 weeks
       expect(@upcoming.period_end).to eq(@upcoming.lines.data[0].period.start)
@@ -512,6 +556,8 @@ shared_examples 'Invoice API' do
     end
 
     it 'chooses the most recent of multiple subscriptions' do
+      skip 'create_preview can no longer preview across all subscriptions' unless legacy_upcoming_api?
+
       @shortplan = stripe_helper.create_plan(id: 'a', product: product.id, interval: "week") # 1 week sub
       @plainplan = stripe_helper.create_plan(id: 'b', product: product.id, interval: "month") # 1 month sub
       @longplan  = stripe_helper.create_plan(id: 'c', product: product.id, interval: "year") # 1 year sub
@@ -520,7 +566,7 @@ shared_examples 'Invoice API' do
       @shortsub = Stripe::Subscription.create(plan: @shortplan.id, customer: customer.id)
       @longsub  = Stripe::Subscription.create(plan: @longplan.id, customer: customer.id)
 
-      @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+      @upcoming = preview_invoice(customer: customer.id)
 
       expect(@upcoming.period_start + 604800).to eq(@upcoming.period_end) # 604800 = 1 week
       expect(@upcoming.period_end + 604800).to eq(@upcoming.lines.data[0].period.end) # 604800 = 1 week
@@ -528,9 +574,16 @@ shared_examples 'Invoice API' do
     end
 
     it 'does not store the stripe invoice in memory since its only a preview', with_subscription: true do
-      invoice = Stripe::Invoice.upcoming(customer: customer.id)
+      invoice = preview_invoice(customer: customer.id, subscription: subscription.id)
       data = test_data_source(:invoices)
       expect(data[invoice.id]).to be_nil
+    end
+
+    it 'prefixes the preview invoice id with upcoming_in', with_subscription: true do
+      skip 'only applies to create_preview' if legacy_upcoming_api?
+
+      invoice = preview_invoice(customer: customer.id, subscription: subscription.id)
+      expect(invoice.id).to start_with("#{StripeMock.global_id_prefix}upcoming_in_")
     end
 
     context 'retrieving invoice line items' do
@@ -548,7 +601,7 @@ shared_examples 'Invoice API' do
       it 'returns all line items for upcoming invoice' do
         plan = stripe_helper.create_plan(product: product.id, id: "silver_pl")
         subscription = Stripe::Subscription.create(plan: plan.id, customer: customer.id)
-        upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        upcoming = preview_invoice(customer: customer.id, subscription: subscription.id)
         line_items = upcoming.lines
 
         expect(upcoming).to be_a Stripe::Invoice
@@ -564,7 +617,7 @@ shared_examples 'Invoice API' do
       it 'for one month plan on the 1st' do
         @plan = stripe_helper.create_plan(product: product.id, id: "one_mo_plan")
         @sub = Stripe::Subscription.create(plan: @plan.id, customer: customer.id, current_period_start: Time.utc(2014,1,1,12).to_i)
-        @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        @upcoming = preview_invoice(customer: customer.id, subscription: @sub.id)
 
         expect(Time.at(@upcoming.period_start)).to               eq(Time.utc(2014,1,1,12))
         expect(Time.at(@upcoming.period_end)).to                 eq(Time.utc(2014,2,1,12))
@@ -575,7 +628,7 @@ shared_examples 'Invoice API' do
       it 'for one year plan on the 1st' do
         @plan = stripe_helper.create_plan(interval: "year", product: product.id, id: "year_plan")
         @sub = Stripe::Subscription.create(plan: @plan.id, customer: customer.id, current_period_start: Time.utc(2012,1,1,12).to_i)
-        @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        @upcoming = preview_invoice(customer: customer.id, subscription: @sub.id)
 
         expect(Time.at(@upcoming.period_start)).to               eq(Time.utc(2012,1,1,12))
         expect(Time.at(@upcoming.period_end)).to                 eq(Time.utc(2013,1,1,12))
@@ -586,7 +639,7 @@ shared_examples 'Invoice API' do
       it 'for one month plan on the 31st' do
         @plan = stripe_helper.create_plan(product: product.id, id: "one_mo_plan")
         @sub = Stripe::Subscription.create(plan: @plan.id, customer: customer.id, current_period_start: Time.utc(2014,1,31,12).to_i)
-        @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        @upcoming = preview_invoice(customer: customer.id, subscription: @sub.id)
 
         expect(Time.at(@upcoming.period_start)).to               eq(Time.utc(2014,1,31,12))
         expect(Time.at(@upcoming.period_end)).to                 eq(Time.utc(2014,2,28,12))
@@ -597,7 +650,7 @@ shared_examples 'Invoice API' do
       it 'for one year plan on feb. 29th' do
         @plan = stripe_helper.create_plan(product: product.id, interval: "year", id: "year_plan")
         @sub = Stripe::Subscription.create(plan: @plan.id, customer: customer.id, current_period_start: Time.utc(2012,2,29,12).to_i)
-        @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        @upcoming = preview_invoice(customer: customer.id, subscription: @sub.id)
 
         expect(Time.at(@upcoming.period_start)).to               eq(Time.utc(2012,2,29,12))
         expect(Time.at(@upcoming.period_end)).to                 eq(Time.utc(2013,2,28,12))
@@ -608,7 +661,7 @@ shared_examples 'Invoice API' do
       it 'for two month plan on dec. 31st' do
         @plan = stripe_helper.create_plan(product: product.id, interval_count: 2, id: 'two_mo_plan')
         @sub = Stripe::Subscription.create(plan: @plan.id, customer: customer.id, current_period_start: Time.utc(2013,12,31,12).to_i)
-        @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        @upcoming = preview_invoice(customer: customer.id, subscription: @sub.id)
 
         expect(Time.at(@upcoming.period_start)).to               eq(Time.utc(2013,12,31,12))
         expect(Time.at(@upcoming.period_end)).to                 eq(Time.utc(2014, 2,28,12))
@@ -619,7 +672,7 @@ shared_examples 'Invoice API' do
       it 'for three month plan on nov. 30th' do
         @plan = stripe_helper.create_plan(product: product.id, interval_count: 3)
         @sub = Stripe::Subscription.create(plan: @plan.id, customer: customer.id, current_period_start: Time.utc(2013,11,30,12).to_i)
-        @upcoming = Stripe::Invoice.upcoming(customer: customer.id)
+        @upcoming = preview_invoice(customer: customer.id, subscription: @sub.id)
 
         expect(Time.at(@upcoming.period_start)).to               eq(Time.utc(2013,11,30,12))
         expect(Time.at(@upcoming.period_end)).to                 eq(Time.utc(2014, 2,28,12))

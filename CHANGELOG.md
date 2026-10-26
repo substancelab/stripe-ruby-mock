@@ -1,4 +1,6 @@
 ### Unreleased
+- Support Stripe version 18.4.2
+- Add `Stripe::Invoice.create_preview` (`POST /v1/invoices/create_preview`), which replaces the upcoming invoice API removed in stripe-ruby 15
 
 ### 5.0.0
 - [#919](https://github.com/stripe-ruby-mock/stripe-ruby-mock/pull/919) Add capabilities to mock account data [@cazwazacz](https://github.com/cazwazacz)

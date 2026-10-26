@@ -1,11 +1,11 @@
 PATH
   remote: ..
   specs:
-    stripe-ruby-mock (4.0.0)
+    stripe-ruby-mock (5.0.0)
       dante (>= 0.2.0)
       drb (>= 2.0.4, < 3)
       multi_json (~> 1.0)
-      stripe (> 5, < 14)
+      stripe (> 5, < 19)
 
 GEM
   remote: https://rubygems.org/
