@@ -220,6 +220,8 @@ module StripeMock
                                    amount: -unused_amount,
                                    description: 'Unused time',
                                    plan: subscription[:plan],
+                                   subscription: subscription[:id],
+                                   subscription_item: subscription.dig(:items, :data, 0, :id),
                                    period: {
                                        start: subscription_proration_date.to_i,
                                        end: subscription[:current_period_end]
@@ -236,6 +238,8 @@ module StripeMock
                                      amount: remaining_amount,
                                      description: 'Remaining time',
                                      plan: preview_plan,
+                                     subscription: subscription[:id],
+                                     subscription_item: subscription.dig(:items, :data, 0, :id),
                                      period: {
                                          start: subscription_proration_date.to_i,
                                          end: subscription[:current_period_end]
@@ -276,6 +280,8 @@ module StripeMock
           id: subscription[:id],
           type: "subscription",
           plan: subscription[:plan],
+          subscription: subscription[:id],
+          subscription_item: subscription.dig(:items, :data, 0, :id),
           amount: subscription[:status] == 'trialing' ? 0 : plan_amount * subscription[:quantity],
           discountable: true,
           quantity: subscription[:quantity],

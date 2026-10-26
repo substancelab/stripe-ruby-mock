@@ -31,6 +31,20 @@ shared_examples 'Customer Subscriptions with plans' do
   let(:free_plan) { stripe_helper.create_plan(id: 'free', product: product.id, amount: 0) }
 
   context "creating a new subscription" do
+    it "puts the current period on subscription items for stripe >= 15" do
+      skip 'only applies to stripe >= 15' unless StripeMock::Compat.stripe_gte_15?
+
+      customer = Stripe::Customer.create(source: gen_card_tk)
+      subscription = Stripe::Subscription.create(customer: customer.id, items: [{ plan: plan.id }])
+      item = subscription.items.data.first
+
+      expect(item.current_period_start).to eq(subscription.current_period_start)
+      expect(item.current_period_end).to eq(subscription.current_period_end)
+
+      updated = Stripe::Subscription.update(subscription.id, items: [{ id: item.id, plan: plan.id, quantity: 3 }])
+      expect(updated.items.data.first.current_period_end).to eq(updated.current_period_end)
+    end
+
     it "adds a new subscription to customer with none using items", live: true do
       plan
       customer = Stripe::Customer.create(source: gen_card_tk)
