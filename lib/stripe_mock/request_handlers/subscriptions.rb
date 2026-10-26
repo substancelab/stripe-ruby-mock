@@ -235,6 +235,13 @@ module StripeMock
         subscription = assert_existence :subscription, subscription_id, subscriptions[subscription_id]
         verify_active_status(subscription)
 
+        # Stripe keeps created and the billing cycle anchor unless the update
+        # sets a new anchor, changes the trial or changes the billing interval
+        created_was = subscription[:created]
+        billing_cycle_anchor_was = subscription[:billing_cycle_anchor]
+        interval_was = billing_interval(subscription[:plan])
+        resets_billing_cycle_anchor = params.key?(:billing_cycle_anchor) || params.key?(:trial_end) || params.key?(:trial_period_days)
+
         customer_id = subscription[:customer]
         customer = assert_existence :customer, customer_id, customers[stripe_account][customer_id]
 
@@ -310,6 +317,12 @@ module StripeMock
 
         subscription = resolve_subscription_changes(subscription, subscription_plans, customer, params)
 
+        subscription[:created] = created_was
+        interval_changed = billing_interval(subscription[:plan]) != interval_was
+        unless resets_billing_cycle_anchor || interval_changed
+          subscription[:billing_cycle_anchor] = billing_cycle_anchor_was
+        end
+
         verify_card_present(customer, subscription_plans.first, subscription, params) if plan_amount_was == 0 && subscription.dig(:plan, :amount) && subscription.dig(:plan, :amount) > 0
 
         # delete the old subscription, replace with the new subscription
@@ -357,6 +370,14 @@ module StripeMock
       end
 
       private
+
+      # [interval, interval_count] of a plan or a price
+      def billing_interval(plan)
+        return nil if plan.nil?
+
+        source = plan[:interval] ? plan : (plan[:recurring] || {})
+        [source[:interval], source[:interval_count] || 1]
+      end
 
       def get_subscription_plans_from_params(params)
         plan_ids = if params[:plan]

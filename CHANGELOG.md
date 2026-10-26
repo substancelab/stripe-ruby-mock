@@ -1,4 +1,6 @@
 ### Unreleased
+- Keep `created` and `billing_cycle_anchor` when updating a subscription, unless the update sets a new anchor, changes the trial or changes the billing interval
+- Derive a price's `unit_amount_decimal` from its `unit_amount` instead of always returning `"2000"`
 
 ### 5.0.0
 - [#919](https://github.com/stripe-ruby-mock/stripe-ruby-mock/pull/919) Add capabilities to mock account data [@cazwazacz](https://github.com/cazwazacz)
