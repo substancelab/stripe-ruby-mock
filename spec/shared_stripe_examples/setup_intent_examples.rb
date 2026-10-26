@@ -86,4 +86,34 @@ shared_examples 'SetupIntent API' do
       expect(updated.metadata[:foo]).to eq(:bar)
     end
   end
+
+  describe 'payment method types' do
+    it 'computes payment_method_types from allowed and excluded payment method types' do
+      setup_intent = Stripe::SetupIntent.create(
+        allowed_payment_method_types: ['card', 'sepa_debit'],
+        excluded_payment_method_types: ['card']
+      )
+      expect(setup_intent.payment_method_types).to eq(['sepa_debit'])
+
+      updated = Stripe::SetupIntent.update(setup_intent.id, excluded_payment_method_types: [])
+      expect(updated.payment_method_types).to eq(['card', 'sepa_debit'])
+    end
+
+    it 'rejects payment_method_types on stripe >= 20' do
+      skip "payment_method_types is still supported in stripe #{Stripe::VERSION}" unless StripeMock::Compat.stripe_gte_20?
+
+      setup_intent = Stripe::SetupIntent.create
+
+      [
+        -> { Stripe::SetupIntent.create(payment_method_types: ['card']) },
+        -> { Stripe::SetupIntent.update(setup_intent.id, payment_method_types: ['card']) }
+      ].each do |request|
+        expect { request.call }.to raise_error { |e|
+          expect(e).to be_a(Stripe::InvalidRequestError)
+          expect(e.http_status).to eq(400)
+          expect(e.code).to eq('payment_method_types_no_longer_supported')
+        }
+      end
+    end
+  end
 end

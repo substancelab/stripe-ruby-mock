@@ -1181,7 +1181,8 @@ shared_examples 'Customer Subscriptions with plans' do
       customer = Stripe::Customer.create(id: 'test_billing_anchor', plan: plan.id, source: gen_card_tk)
 
       sub = Stripe::Subscription.retrieve(customer.subscriptions.data.first.id)
-      sub.billing_cycle_anchor = 'now'
+      # billing_cycle_anchor is an object as of stripe-ruby 20
+      sub.billing_cycle_anchor = StripeMock::Compat.stripe_gte_20? ? { type: 'now' } : 'now'
       sub.save
 
       expect(sub.billing_cycle_anchor).to be_a(Integer)
@@ -1215,6 +1216,48 @@ shared_examples 'Customer Subscriptions with plans' do
 
       expect(subscription.pause_collection.behavior).to eq('mark_uncollectible')
       expect(subscription.pause_collection.resumes_at).to be_nil
+    end
+
+    describe 'billing_cycle_anchor' do
+      let(:customer) { Stripe::Customer.create(source: gen_card_tk) }
+      let(:future_anchor) { Time.now.utc.to_i + 3600 }
+      let(:subscription) { Stripe::Subscription.create(items: [{ plan: plan.id }], customer: customer.id, billing_cycle_anchor: future_anchor) }
+
+      it 'resets the anchor with { type: "now" }' do
+        updated = Stripe::Subscription.update(subscription.id, billing_cycle_anchor: { type: 'now' })
+        expect(updated.billing_cycle_anchor).to be_within(5).of(Time.now.utc.to_i)
+      end
+
+      it 'sets the anchor with { type: "timestamp" }' do
+        timestamp = Time.now.utc.to_i + 7200
+        updated = Stripe::Subscription.update(subscription.id, billing_cycle_anchor: { type: 'timestamp', timestamp: timestamp })
+        expect(updated.billing_cycle_anchor).to eq(timestamp)
+      end
+
+      it 'accepts { type: "unchanged" }' do
+        updated = Stripe::Subscription.update(subscription.id, billing_cycle_anchor: { type: 'unchanged' })
+        expect(updated.billing_cycle_anchor).to be_a(Integer)
+      end
+
+      it 'rejects an unknown type' do
+        expect { Stripe::Subscription.update(subscription.id, billing_cycle_anchor: { type: 'later' }) }.to raise_error { |e|
+          expect(e).to be_a(Stripe::InvalidRequestError)
+          expect(e.http_status).to eq(400)
+        }
+      end
+
+      it 'handles the "now" string depending on the stripe version' do
+        if StripeMock::Compat.stripe_gte_20?
+          expect { Stripe::Subscription.update(subscription.id, billing_cycle_anchor: 'now') }.to raise_error { |e|
+            expect(e).to be_a(Stripe::InvalidRequestError)
+            expect(e.http_status).to eq(400)
+            expect(e.param).to eq('billing_cycle_anchor')
+          }
+        else
+          updated = Stripe::Subscription.update(subscription.id, billing_cycle_anchor: 'now')
+          expect(updated.billing_cycle_anchor).to be_within(5).of(Time.now.utc.to_i)
+        end
+      end
     end
   end
 

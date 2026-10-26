@@ -113,8 +113,9 @@ module StripeMock
       end
 
       def create_checkout_session_params(params = {})
+        payment_method_types_key = StripeMock::Compat.stripe_gte_20? ? :allowed_payment_method_types : :payment_method_types
         {
-          payment_method_types: ['card'],
+          payment_method_types_key => ['card'],
           line_items: params[:mode] == "setup" ? nil : [{
             name: 'T-shirt',
             quantity: 1,

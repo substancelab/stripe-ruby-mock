@@ -1,7 +1,7 @@
 module StripeMock
   module RequestHandlers
     module PaymentIntents
-      ALLOWED_PARAMS = [:description, :metadata, :receipt_email, :shipping, :destination, :payment_method, :payment_method_types, :setup_future_usage, :transfer_data, :amount, :currency]
+      ALLOWED_PARAMS = [:description, :metadata, :receipt_email, :shipping, :destination, :payment_method, :payment_method_types, :allowed_payment_method_types, :excluded_payment_method_types, :setup_future_usage, :transfer_data, :amount, :currency]
 
       def PaymentIntents.included(klass)
         klass.add_handler 'post /v1/payment_intents',               :new_payment_intent
@@ -18,6 +18,10 @@ module StripeMock
         id = new_id('pi')
 
         ensure_payment_intent_required_params(params)
+        reject_payment_method_types_param(params)
+        if (types = computed_payment_method_types(params))
+          params = params.merge(payment_method_types: types)
+        end
         status = case params[:amount]
         when 3184 then 'requires_action'
         when 3178 then 'requires_payment_method'
@@ -46,7 +50,15 @@ module StripeMock
         id = $1
 
         payment_intent = assert_existence :payment_intent, id, payment_intents[id]
-        payment_intents[id] = Util.rmerge(payment_intent, params.select{ |k,v| ALLOWED_PARAMS.include?(k)})
+        reject_payment_method_types_param(params)
+        updates = params.select{ |k,v| ALLOWED_PARAMS.include?(k)}
+        # Lists of payment method types are replaced, not merged
+        type_lists = updates.slice(*Helpers::PAYMENT_METHOD_TYPES_PARAMS)
+        payment_intents[id] = Util.rmerge(payment_intent, updates.except(*Helpers::PAYMENT_METHOD_TYPES_PARAMS)).merge(type_lists)
+        if (types = computed_payment_method_types(payment_intents[id]))
+          payment_intents[id][:payment_method_types] = types
+        end
+        payment_intents[id]
       end
 
       def get_payment_intents(route, method_url, params, headers)
@@ -89,6 +101,7 @@ module StripeMock
       def confirm_payment_intent(route, method_url, params, headers)
         route =~ method_url
         payment_intent = assert_existence :payment_intent, $1, payment_intents[$1]
+        reject_payment_method_types_param(params)
 
         if params[:payment_method]
           payment_intent[:payment_method] = params[:payment_method]

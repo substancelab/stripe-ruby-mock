@@ -227,9 +227,7 @@ module StripeMock
         stripe_account = headers && headers[:stripe_account] || Stripe.api_key
         route =~ method_url
 
-        if params[:billing_cycle_anchor] == 'now'
-          params[:billing_cycle_anchor] = Time.now.utc.to_i
-        end
+        normalize_billing_cycle_anchor_param(params)
 
         subscription_id = $2 ? $2 : $1
         subscription = assert_existence :subscription, subscription_id, subscriptions[subscription_id]
@@ -357,6 +355,45 @@ module StripeMock
       end
 
       private
+
+      # Turns billing_cycle_anchor into a timestamp, or removes it when unchanged.
+      # As of API version 2026-09-30.endive (stripe-ruby 20) it is an object with
+      # a type, e.g. { type: 'now' }, instead of the strings 'now' and 'unchanged'.
+      def normalize_billing_cycle_anchor_param(params)
+        anchor = params[:billing_cycle_anchor]
+
+        type, timestamp =
+          case anchor
+          when Hash
+            [anchor[:type].to_s, anchor[:timestamp]]
+          when 'now', 'unchanged'
+            if Compat.stripe_gte_20?
+              raise Stripe::InvalidRequestError.new(
+                "Invalid object: billing_cycle_anchor must be an object with a `type`, e.g. `{type: '#{anchor}'}`",
+                'billing_cycle_anchor',
+                http_status: 400
+              )
+            end
+            [anchor, nil]
+          else
+            return
+          end
+
+        case type
+        when 'now'
+          params[:billing_cycle_anchor] = Time.now.utc.to_i
+        when 'unchanged'
+          params.delete(:billing_cycle_anchor)
+        when 'timestamp'
+          params[:billing_cycle_anchor] = timestamp.to_i
+        else
+          raise Stripe::InvalidRequestError.new(
+            "Invalid billing_cycle_anchor[type]: must be one of now, unchanged or timestamp",
+            'billing_cycle_anchor[type]',
+            http_status: 400
+          )
+        end
+      end
 
       def get_subscription_plans_from_params(params)
         plan_ids = if params[:plan]

@@ -1,6 +1,15 @@
 require "spec_helper"
 
 shared_examples "Checkout Session API" do
+  # payment_method_types can no longer be passed as of stripe-ruby 20
+  let(:card_payment_method_types) do
+    if StripeMock::Compat.stripe_gte_20?
+      { allowed_payment_method_types: ["card"] }
+    else
+      { payment_method_types: ["card"] }
+    end
+  end
+
   it "creates PaymentIntent with payment mode" do
     line_items = [{
       name: "T-shirt",
@@ -9,7 +18,7 @@ shared_examples "Checkout Session API" do
       currency: "usd",
     }]
     session = Stripe::Checkout::Session.create(
-      payment_method_types: ["card"],
+      **card_payment_method_types,
       line_items: line_items,
       success_url: "https://example.com/success"
     )
@@ -27,7 +36,7 @@ shared_examples "Checkout Session API" do
         session = Stripe::Checkout::Session.create(
           customer: "customer_id",
           success_url: "localhost/nada",
-          payment_method_types: ["card"],
+          **card_payment_method_types,
         )
       end.to raise_error(Stripe::InvalidRequestError, /line_items/i)
 
@@ -37,7 +46,7 @@ shared_examples "Checkout Session API" do
   it "creates SetupIntent with setup mode" do
     session = Stripe::Checkout::Session.create(
       mode: "setup",
-      payment_method_types: ["card"],
+      **card_payment_method_types,
       success_url: "https://example.com/success"
     )
 
@@ -52,7 +61,7 @@ shared_examples "Checkout Session API" do
         session = Stripe::Checkout::Session.create(
           customer: "customer_id",
           success_url: "localhost/nada",
-          payment_method_types: ["card"],
+          **card_payment_method_types,
           mode: "subscription",
         )
       end.to raise_error(Stripe::InvalidRequestError, /line_items/i)
@@ -83,12 +92,40 @@ shared_examples "Checkout Session API" do
       initial_session = Stripe::Checkout::Session.create(
         mode: "setup",
         success_url: "https://example.com",
-        payment_method_types: ["card"]
+        **card_payment_method_types
       )
 
       checkout_session = Stripe::Checkout::Session.retrieve(id: initial_session.id, expand: ["setup_intent"])
 
       expect(checkout_session.setup_intent).to be_a_kind_of(Stripe::SetupIntent)
     end
+  end
+
+  it "sets payment_method_types from allowed and excluded payment method types" do
+    session = Stripe::Checkout::Session.create(
+      mode: "setup",
+      allowed_payment_method_types: ["card", "sepa_debit", "us_bank_account"],
+      excluded_payment_method_types: ["us_bank_account"],
+      success_url: "https://example.com/success"
+    )
+
+    expect(session.payment_method_types).to eq(["card", "sepa_debit"])
+    expect(Stripe::SetupIntent.retrieve(session.setup_intent).payment_method_types).to eq(["card", "sepa_debit"])
+  end
+
+  it "rejects payment_method_types on stripe >= 20" do
+    skip "payment_method_types is still supported in stripe #{Stripe::VERSION}" unless StripeMock::Compat.stripe_gte_20?
+
+    expect {
+      Stripe::Checkout::Session.create(
+        mode: "setup",
+        payment_method_types: ["card"],
+        success_url: "https://example.com/success"
+      )
+    }.to raise_error { |e|
+      expect(e).to be_a(Stripe::InvalidRequestError)
+      expect(e.http_status).to eq(400)
+      expect(e.code).to eq("payment_method_types_no_longer_supported")
+    }
   end
 end

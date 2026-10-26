@@ -44,6 +44,7 @@ require 'stripe_mock/request_handlers/helpers/coupon_helpers.rb'
 require 'stripe_mock/request_handlers/helpers/search_helpers.rb'
 require 'stripe_mock/request_handlers/helpers/subscription_helpers.rb'
 require 'stripe_mock/request_handlers/helpers/token_helpers.rb'
+require 'stripe_mock/request_handlers/helpers/payment_method_types_helpers.rb'
 
 require 'stripe_mock/request_handlers/validators/param_validators.rb'
 

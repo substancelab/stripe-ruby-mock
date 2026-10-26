@@ -13,6 +13,8 @@ module StripeMock
           id = params[:id] || new_id('cs')
 
           require_param(:success_url) if params[:success_url].nil? || params[:success_url].empty?
+          reject_payment_method_types_param(params)
+          payment_method_types = params[:payment_method_types] || computed_payment_method_types(params)
 
           line_items = nil
           if params[:line_items]
@@ -74,7 +76,7 @@ module StripeMock
               currency: currency,
               customer: params[:customer],
               payment_method_options: params[:payment_method_options],
-              payment_method_types: params[:payment_method_types]
+              allowed_payment_method_types: payment_method_types
             }.merge(params[:payment_intent_data] || {}), nil)[:id]
             checkout_session_line_items[id] = line_items
           when "setup"
@@ -84,7 +86,7 @@ module StripeMock
             setup_intent = new_setup_intent(nil, nil, {
               customer: params[:customer],
               payment_method_options: params[:payment_method_options],
-              payment_method_types: params[:payment_method_types]
+              allowed_payment_method_types: payment_method_types
             }.merge(params[:setup_intent_data] || {}), nil)[:id]
             payment_status = "no_payment_required"
           when "subscription"
@@ -118,7 +120,9 @@ module StripeMock
             mode: params[:mode],
             payment_intent: payment_intent,
             payment_method_options: params[:payment_method_options],
-            payment_method_types: params[:payment_method_types],
+            allowed_payment_method_types: params[:allowed_payment_method_types],
+            excluded_payment_method_types: params[:excluded_payment_method_types],
+            payment_method_types: payment_method_types,
             payment_status: payment_status,
             setup_intent: setup_intent,
             shipping: nil,
