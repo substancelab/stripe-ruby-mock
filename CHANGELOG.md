@@ -1,4 +1,5 @@
 ### Unreleased
+- On stripe >= 15 (API version 2025-03-31.basil), also return fields in their new locations: `current_period_start` and `current_period_end` on subscription items, `parent.subscription_details` on invoices, and `parent` and `pricing` on invoice line items. The old fields are kept
 - Support Stripe version 19.6.2
 - Support Stripe version 18.4.2
 - Support the `subscription_details` params of `Stripe::Invoice.create_preview`, which replaces the upcoming invoice API removed in stripe-ruby 15. On stripe >= 15 a `subscription` or `subscription_details.items` is required and preview ids are prefixed with `upcoming_in_`

@@ -24,6 +24,19 @@ module StripeMock
             Data.mock_subscription_item(params)
           end
         end
+        sync_subscription_item_periods(subscription)
+        subscription
+      end
+
+      # As of API version 2025-03-31.basil (stripe-ruby 15) the current period
+      # lives on each subscription item. Keep it on the subscription as well.
+      def sync_subscription_item_periods(subscription)
+        return subscription unless Compat.stripe_gte_15?
+
+        subscription[:items][:data].each do |item|
+          item[:current_period_start] = subscription[:current_period_start]
+          item[:current_period_end] = subscription[:current_period_end]
+        end
         subscription
       end
 
