@@ -22,7 +22,13 @@ module StripeMock
         require_param(:subscription) unless params[:subscription]
         require_param(:plan) unless params[:plan]
 
-        subscriptions_items[params[:id]] = Data.mock_subscription_item(params.merge(plan: plans[params[:plan]]))
+        item_params = params.merge(plan: plans[params[:plan]])
+        if Compat.stripe_gte_15? && (subscription = subscriptions[params[:subscription]])
+          item_params[:current_period_start] = subscription[:current_period_start]
+          item_params[:current_period_end] = subscription[:current_period_end]
+        end
+
+        subscriptions_items[params[:id]] = Data.mock_subscription_item(item_params)
       end
 
       def update_subscription_item(route, method_url, params, headers)

@@ -506,6 +506,24 @@ module StripeMock
       due = invoice[:total] + invoice[:starting_balance]
       invoice[:amount_due] = due < 0 ? 0 : due
       invoice[:ending_balance] = invoice[:starting_balance] + invoice[:total] if invoice[:amount_due] == 0
+      add_invoice_parent(invoice) if Compat.stripe_gte_15? && !params.key?(:parent)
+      invoice
+    end
+
+    # As of API version 2025-03-31.basil (stripe-ruby 15) the invoice's
+    # subscription is found under parent.subscription_details
+    def self.add_invoice_parent(invoice)
+      invoice[:parent] =
+        if invoice[:subscription]
+          {
+            type: 'subscription_details',
+            quote_details: nil,
+            subscription_details: {
+              metadata: {},
+              subscription: invoice[:subscription]
+            }
+          }
+        end
       invoice
     end
 
@@ -534,7 +552,64 @@ module StripeMock
         plan: nil,
         description: "Test invoice item",
         metadata: {}
-      }.merge(params)
+      }.merge(params).tap do |line_item|
+        if Compat.stripe_gte_15?
+          add_line_item_parent(line_item) unless params.key?(:parent)
+          add_line_item_pricing(line_item) unless params.key?(:pricing)
+        end
+      end
+    end
+
+    # As of API version 2025-03-31.basil (stripe-ruby 15) a line item's
+    # subscription, subscription item and proration are found under parent
+    def self.add_line_item_parent(line_item)
+      proration_details = { credited_items: nil }
+
+      line_item[:parent] =
+        if line_item[:type] == 'subscription' || line_item[:proration]
+          {
+            type: 'subscription_item_details',
+            invoice_item_details: nil,
+            subscription_item_details: {
+              invoice_item: line_item[:type] == 'invoiceitem' ? line_item[:id] : nil,
+              proration: !!line_item[:proration],
+              proration_details: proration_details,
+              subscription: line_item[:subscription],
+              subscription_item: line_item[:subscription_item]
+            }
+          }
+        else
+          {
+            type: 'invoice_item_details',
+            subscription_item_details: nil,
+            invoice_item_details: {
+              invoice_item: line_item[:id],
+              proration: !!line_item[:proration],
+              proration_details: proration_details,
+              subscription: line_item[:subscription]
+            }
+          }
+        end
+      line_item
+    end
+
+    # As of API version 2025-03-31.basil (stripe-ruby 15) a line item's price
+    # is found under pricing.price_details
+    def self.add_line_item_pricing(line_item)
+      price = line_item[:price] || line_item[:plan]
+      line_item[:pricing] =
+        if price.is_a?(Hash)
+          unit_amount = price[:unit_amount] || price[:amount]
+          {
+            type: 'price_details',
+            price_details: {
+              price: price[:id],
+              product: price[:product]
+            },
+            unit_amount_decimal: unit_amount&.to_s
+          }
+        end
+      line_item
     end
 
     def self.mock_invoice_item(params = {})

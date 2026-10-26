@@ -594,6 +594,46 @@ shared_examples 'Invoice API' do
       expect(invoice.id).to start_with("#{StripeMock.global_id_prefix}upcoming_in_")
     end
 
+    describe 'fields moved in API version 2025-03-31.basil' do
+      before { skip 'only applies to stripe >= 15' unless StripeMock::Compat.stripe_gte_15? }
+
+      it 'puts the subscription under parent.subscription_details', with_subscription: true do
+        invoice = preview_invoice(customer: customer.id, subscription: subscription.id)
+
+        expect(invoice.parent.type).to eq('subscription_details')
+        expect(invoice.parent.subscription_details.subscription).to eq(subscription.id)
+      end
+
+      it 'puts subscription line item details under parent and pricing', with_subscription: true do
+        invoice = preview_invoice(customer: customer.id, subscription: subscription.id)
+        line = invoice.lines.data.first
+
+        expect(line.parent.type).to eq('subscription_item_details')
+        expect(line.parent.subscription_item_details.subscription).to eq(subscription.id)
+        expect(line.parent.subscription_item_details.subscription_item).to eq(subscription.items.data.first.id)
+        expect(line.parent.subscription_item_details.proration).to eq(false)
+        expect(line.pricing.type).to eq('price_details')
+        expect(line.pricing.price_details.price).to eq(plan.id)
+        expect(line.pricing.price_details.product).to eq(product.id)
+      end
+
+      it 'marks prorations under parent.subscription_item_details', with_subscription: true do
+        new_plan = stripe_helper.create_plan(id: '100m', product: product.id, amount: 100_00, interval: 'month')
+        invoice = preview_invoice(customer: customer.id, subscription: subscription.id, subscription_plan: new_plan.id, subscription_proration_date: Time.now.to_i + 3600)
+
+        prorations = invoice.lines.data.select { |line| line.parent.subscription_item_details&.proration }
+        expect(prorations.map(&:amount)).to all(be_nonzero)
+        expect(prorations.length).to eq(2)
+      end
+
+      it 'has no parent for an invoice without a subscription' do
+        invoice = Stripe::Invoice.create(customer: customer.id)
+
+        expect(invoice.parent).to be_nil
+        expect(invoice.lines.data.first.parent.type).to eq('invoice_item_details')
+      end
+    end
+
     context 'retrieving invoice line items' do
       it 'returns all line items for created invoice' do
         invoice = Stripe::Invoice.create(customer: customer.id)
